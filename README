@@ -1,0 +1,12 @@
+This is a quick hack to convert the OpenEXR files output by Maya to TIFF.
+
+Maya outputs OpenEXR files using render-pass-specific layers, such as NX, NY, NZ
+for normal data.  Even Maya itself doesn't actually support this, so these files
+are only usable in a few compositing packages.
+
+Only 32-bit float data is output.  If input files contain data in other
+formats, it'll be converted.  EXR only supports 16-bit float, 32-bit float
+and 32-bit int.  TIFF and most authoring tools don't support 16-bit float.
+
+This is only tested in Debian, with the libilmbase-dev package.
+
