@@ -52,6 +52,8 @@ void convert(string input_filename, string output_filename)
         { "A", "A" },
     };
 
+    bool convert_normals = false;
+    
     // Make a map from output channels to input channels.
     map<string, string> channel_names;
     for(auto it = file.header().channels().begin(); it != file.header().channels().end(); ++it)
@@ -62,6 +64,10 @@ void convert(string input_filename, string output_filename)
         size_t idx = channel_name.find_last_of('.');
         if(idx != channel_name.npos)
             channel_name = channel_name.substr(idx+1);
+
+        // If this is a normals channel, set convert_normals.
+        if(channel_name == "NX")
+            convert_normals = true;
 
         if(channel_map.find(channel_name) == channel_map.end())
         {
@@ -144,7 +150,15 @@ void convert(string input_filename, string output_filename)
         for(int x = 0; x < width; ++x)
         {
             for(int c = 0; c < (int) output_channels.size(); ++c)
-                row[x*channels+c] = (*output_channels[c])[y*width + x];
+            {
+                float value = (*output_channels[c])[y*width + x];
+
+                // Normals in OpenEXR are [-1,+1] floating-point values.  However, even when the data
+                // is floating-point, Maya still expects [0,1] data for other file formats.
+                if(convert_normals)
+                    value = (value / 2) + 0.5;
+                row[x*channels+c] = value;
+            }
         }
         if(TIFFWriteScanline(tif, &row[0], y, 0) < 0)
             break;
