@@ -18,11 +18,31 @@ void convert(string input_filename, string output_filename)
     int width  = dw.max.x - dw.min.x + 1;
     int height = dw.max.y - dw.min.y + 1;
 
+    // Request all of the channels from the EXR in the correct order.  We always request
+    // in FLOAT, which will convert 16-bit floats to 32-bit for us, since 16-bit floats
+    // are rarely supported.  This will also convert 32-bit ints, which isn't ideal,
+    // but that's less commonly used.
+    //
+    // It would be easy to request multiple alpha channels and output them to more EXTRASAMPLES,
+    // but without use cases we won't know what to do with them, so for now just handle regular
+    // alpha.
+    FrameBuffer frameBuffer;
+    map<string, vector<float> > channel_data;
+    for(auto it = file.header().channels().begin(); it != file.header().channels().end(); ++it)
+    {
+        string channel_name = it.name();
+
+        vector<float> &buf = channel_data[channel_name];
+        buf.resize(height*width, 1);
+
+        frameBuffer.insert(channel_name.c_str(), Slice(FLOAT, (char *) &buf[0], 4 /* bytes */, sizeof(4) * width, 1, 1, 0.0));
+    }
+
     // Map from input channels to output channels.  For example, NX/NY/NZ in a normal
     // map image is mapped to RGB.
     map<string,string> channel_map = {
-        { "Z", "R" },
-        { "Y", "R" },
+        { "Z", "Y" },
+        { "Y", "Y" },
         { "R", "R" },
         { "G", "G" },
         { "B", "B" },
@@ -57,33 +77,30 @@ void convert(string input_filename, string output_filename)
             exit(1);
         }
 
-        // Store the channel that we'll get this output channel from.  Use the whole layer name,
-        // not just the data type portion that we parsed out.
-        channel_names[new_name] = it.name();
+        // As a special case, convert "Y" (monochrome) to R, G, B output channels.  Maya doesn't
+        // seem to support 32-bit monochrome TIFFs.
+        if(new_name == "Y")
+        {
+            channel_names["R"] = it.name();
+            channel_names["G"] = it.name();
+            channel_names["B"] = it.name();
+        }
+        else
+        {
+            // Store the channel that we'll get this output channel from.  Use the whole layer name,
+            // not just the data type portion that we parsed out.
+            channel_names[new_name] = it.name();
+        }
     }
 
-    // Request all of the channels from the EXR in the correct order.  We always request
-    // in FLOAT, which will convert 16-bit floats to 32-bit for us, since 16-bit floats
-    // are rarely supported.  This will also convert 32-bit ints, which isn't ideal,
-    // but that's less commonly used.
-    //
-    // It would be easy to request multiple alpha channels and output them to more EXTRASAMPLES,
-    // but without use cases we won't know what to do with them, so for now just handle regular
-    // alpha.
-    FrameBuffer frameBuffer;
-    vector< vector<float> > channel_data;
+    vector<vector<float> *> output_channels;
     for(string channel_name: {"R", "G", "B", "A"})
     {
         if(channel_names.find(channel_name) == channel_names.end())
             continue;
 
-        channel_data.push_back(vector<float>());
-        vector<float> &buf = channel_data.back();
-        buf.resize(height*width, 1);
-
-        string input_channel_name = channel_names[channel_name];
-        // printf("%s -> %s\n", input_channel_name.c_str(), channel_name.c_str());
-        frameBuffer.insert(input_channel_name.c_str(), Slice(FLOAT, (char *) &buf[0], 4 /* bytes */, sizeof(4) * width, 1, 1, 0.0));
+        string input_channel_name = channel_names.at(channel_name);
+        output_channels.push_back(&channel_data.at(input_channel_name));
     }
 
     // Read the data for each channel.
@@ -95,8 +112,8 @@ void convert(string input_filename, string output_filename)
     if(tif == NULL)
         throw runtime_error("Error opening output file.");
 
-    int channels = channel_data.size();
-    int has_alpha = channel_names.find("A") != channel_names.end();
+    int channels = output_channels.size();
+    bool has_alpha = channel_names.find("A") != channel_names.end();
     TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, width);
     TIFFSetField(tif, TIFFTAG_IMAGELENGTH, height);
     TIFFSetField(tif, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_IEEEFP);
@@ -121,13 +138,13 @@ void convert(string input_filename, string output_filename)
     TIFFSetField(tif, TIFFTAG_COMPRESSION, COMPRESSION_LZW);
 
     // Interleave the channels and output the data.
-    vector<float> row(width*channel_data.size(), 1);
+    vector<float> row(width*output_channels.size(), 1);
     for (int y = 0; y < height; y++)
     {
         for(int x = 0; x < width; ++x)
         {
-            for(int c = 0; c < (int) channel_data.size(); ++c)
-                row[x*channels+c] = channel_data[c][y*width + x];
+            for(int c = 0; c < (int) output_channels.size(); ++c)
+                row[x*channels+c] = (*output_channels[c])[y*width + x];
         }
         if(TIFFWriteScanline(tif, &row[0], y, 0) < 0)
             break;
